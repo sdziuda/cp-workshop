@@ -12,7 +12,6 @@ import java.util.concurrent.Semaphore;
 public class ConcurrentWorkshop implements Workshop {
 
     private final List<WorkplaceWrapper> workplaces;
-    private final Semaphore mutex;
     private final Map<Long, Semaphore> threadSemaphores;
 
     public ConcurrentWorkshop(Collection<Workplace> workplaces) {
@@ -20,7 +19,6 @@ public class ConcurrentWorkshop implements Workshop {
         for (Workplace workplace : workplaces) {
             this.workplaces.add(new WorkplaceWrapper(workplace));
         }
-        this.mutex = new Semaphore(1, true);
         this.threadSemaphores = new ConcurrentHashMap<>();
     }
 
