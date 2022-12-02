@@ -24,17 +24,17 @@ public class ConcurrentWorkshop implements Workshop {
 
     @Override
     public Workplace enter(WorkplaceId wid) {
-        threadSemaphores.putIfAbsent(Thread.currentThread().getId(), new Semaphore(0, true));
+        this.threadSemaphores.putIfAbsent(Thread.currentThread().getId(), new Semaphore(0, true));
         WorkplaceWrapper workplaceWrapper = this.getWorkplaceWrapper(wid);
-        workplaceWrapper.enter(threadSemaphores);
+        workplaceWrapper.enter(this.threadSemaphores);
         return workplaceWrapper.getWorkplace();
     }
 
     @Override
     public Workplace switchTo(WorkplaceId wid) {
         WorkplaceWrapper workplaceFrom = this.getWorkplaceWrapper(Thread.currentThread());
-        workplaceFrom.leave(this.threadSemaphores);
         WorkplaceWrapper workplaceTo = this.getWorkplaceWrapper(wid);
+        workplaceFrom.leave(this.threadSemaphores);
         workplaceTo.enter(this.threadSemaphores);
         return workplaceTo.getWorkplace();
     }
@@ -65,14 +65,12 @@ public class ConcurrentWorkshop implements Workshop {
         private long owner;
         private final Queue<Long> queue;
         private final Semaphore workplaceMutex;
-        private final Semaphore place;
 
         public WorkplaceWrapper(Workplace workplace) {
             this.workplace = workplace;
             this.owner = -1;
             this.queue = new ConcurrentLinkedQueue<>();
             this.workplaceMutex = new Semaphore(1, true);
-            this.place = new Semaphore(1, true);
         }
 
         public Workplace getWorkplace() {
@@ -86,20 +84,17 @@ public class ConcurrentWorkshop implements Workshop {
         public void enter(Map<Long, Semaphore> threadSemaphores) {
             try {
                 this.workplaceMutex.acquire();
-                if (this.owner == -1 && (this.queue.isEmpty() || this.queue.peek() == Thread.currentThread().getId())) {
-                    this.workplaceMutex.release();
-                } else {
+                if (this.owner != -1) {
                     this.queue.add(Thread.currentThread().getId());
                     this.workplaceMutex.release();
                     threadSemaphores.get(Thread.currentThread().getId()).acquire();
-                }
-                this.place.acquire();
-                this.owner = Thread.currentThread().getId();
-                if (!this.queue.isEmpty() && this.queue.peek() == Thread.currentThread().getId()) {
                     this.queue.poll();
                 }
+                this.owner = Thread.currentThread().getId();
             } catch (InterruptedException e) {
                 throw new RuntimeException("panic: unexpected thread interruption");
+            } finally {
+                this.workplaceMutex.release();
             }
         }
 
@@ -107,9 +102,7 @@ public class ConcurrentWorkshop implements Workshop {
             try {
                 this.workplaceMutex.acquire();
                 this.owner = -1;
-                this.place.release();
                 if (!this.queue.isEmpty()) {
-                    this.workplaceMutex.release();
                     threadSemaphores.get(this.queue.peek()).release();
                 } else {
                     this.workplaceMutex.release();
