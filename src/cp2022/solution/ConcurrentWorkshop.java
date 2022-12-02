@@ -11,105 +11,114 @@ import java.util.concurrent.Semaphore;
 
 public class ConcurrentWorkshop implements Workshop {
 
-    private final List<Workplace> workplaces;
-    private final Map<WorkplaceId, Long> workplaceOwners;
-    private final Map<WorkplaceId, Queue<Thread>> queueToWorkplace;
+    private final List<WorkplaceWrapper> workplaces;
     private final Semaphore mutex;
-    private final Semaphore[] workplaceSemaphores;
+    private final Map<Long, Semaphore> threadSemaphores;
 
     public ConcurrentWorkshop(Collection<Workplace> workplaces) {
-        this.workplaces = List.copyOf(workplaces);
-        this.workplaceOwners = new ConcurrentHashMap<>();
+        this.workplaces = new ArrayList<>();
         for (Workplace workplace : workplaces) {
-            workplaceOwners.put(workplace.getId(), 0L);
-        }
-        this.queueToWorkplace = new ConcurrentHashMap<>();
-        for (Workplace workplace : workplaces) {
-            queueToWorkplace.put(workplace.getId(), new ConcurrentLinkedQueue<>(Collections.emptyList()));
+            this.workplaces.add(new WorkplaceWrapper(workplace));
         }
         this.mutex = new Semaphore(1, true);
-        workplaceSemaphores = new Semaphore[workplaces.size()];
-        for (int i = 0; i < workplaces.size(); i++) {
-            workplaceSemaphores[i] = new Semaphore(1, true);
-        }
+        this.threadSemaphores = new ConcurrentHashMap<>();
     }
 
     @Override
     public Workplace enter(WorkplaceId wid) {
-        try {
-            mutex.acquire();
-            queueToWorkplace.get(wid).add(Thread.currentThread());
-            mutex.release();
-
-            return this.enterIfFirstAndEmpty(wid);
-        } catch (InterruptedException e) {
-            throw new RuntimeException("panic: unexpected thread interruption");
-        }
+        threadSemaphores.putIfAbsent(Thread.currentThread().getId(), new Semaphore(0, true));
+        WorkplaceWrapper workplaceWrapper = this.getWorkplaceWrapper(wid);
+        workplaceWrapper.enter(threadSemaphores);
+        return workplaceWrapper.getWorkplace();
     }
 
     @Override
     public Workplace switchTo(WorkplaceId wid) {
-        if (workplaceOwners.get(wid).equals(Thread.currentThread().getId())) {
-            return this.getWorkplace(wid);
-        } else {
-            try {
-                mutex.acquire();
-                WorkplaceId oldWid = this.getWorkplaceId(Thread.currentThread());
-                workplaceOwners.put(oldWid, 0L);
-                workplaceSemaphores[this.getWorkplaceIndex(oldWid)].release();
-                queueToWorkplace.get(wid).add(Thread.currentThread());
-                mutex.release();
-
-                return this.enterIfFirstAndEmpty(wid);
-            } catch (InterruptedException e) {
-                throw new RuntimeException("panic: unexpected thread interruption");
-            }
-        }
+        WorkplaceWrapper workplaceFrom = this.getWorkplaceWrapper(Thread.currentThread());
+        workplaceFrom.leave(this.threadSemaphores);
+        WorkplaceWrapper workplaceTo = this.getWorkplaceWrapper(wid);
+        workplaceTo.enter(this.threadSemaphores);
+        return workplaceTo.getWorkplace();
     }
 
     @Override
     public void leave() {
-        try {
-            mutex.acquire();
-            WorkplaceId wid = this.getWorkplaceId(Thread.currentThread());
-            workplaceOwners.put(wid, 0L);
-            workplaceSemaphores[this.getWorkplaceIndex(wid)].release();
-            mutex.release();
-        } catch (InterruptedException e) {
-            throw new RuntimeException("panic: unexpected thread interruption");
+        WorkplaceWrapper workplaceWrapper = this.getWorkplaceWrapper(Thread.currentThread());
+        workplaceWrapper.leave(this.threadSemaphores);
+        threadSemaphores.remove(Thread.currentThread().getId());
+    }
+
+    private WorkplaceWrapper getWorkplaceWrapper(WorkplaceId wid) {
+        return this.workplaces.stream()
+                .filter(workplaceWrapper -> workplaceWrapper.getWorkplace().getId() == wid)
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("panic: workplace not found"));
+    }
+
+    private WorkplaceWrapper getWorkplaceWrapper(Thread t) {
+        return this.workplaces.stream()
+                .filter(workplaceWrapper -> workplaceWrapper.getOwner() == t.getId())
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("panic: workplace not found"));
+    }
+
+    private static class WorkplaceWrapper {
+        private final Workplace workplace;
+        private long owner;
+        private final Queue<Long> queue;
+        private final Semaphore workplaceMutex;
+        private final Semaphore place;
+
+        public WorkplaceWrapper(Workplace workplace) {
+            this.workplace = workplace;
+            this.owner = -1;
+            this.queue = new ConcurrentLinkedQueue<>();
+            this.workplaceMutex = new Semaphore(1, true);
+            this.place = new Semaphore(1, true);
         }
-    }
 
-    private WorkplaceId getWorkplaceId(Thread thread) {
-        return Objects.requireNonNull(workplaceOwners.entrySet().stream()
-                .filter(e -> e.getValue().equals(thread.getId())).findFirst().orElse(null)).getKey();
-    }
+        public Workplace getWorkplace() {
+            return this.workplace;
+        }
 
-    private int getWorkplaceIndex(WorkplaceId wid) {
-        return workplaces.indexOf(workplaces.stream().filter(w -> w.getId().equals(wid)).findFirst().orElse(null));
-    }
+        public long getOwner() {
+            return this.owner;
+        }
 
-    private Workplace getWorkplace(WorkplaceId wid) {
-        return workplaces.stream().filter(w -> w.getId().equals(wid)).findFirst().orElse(null);
-    }
-
-    private Workplace enterIfFirstAndEmpty(WorkplaceId wid) {
-        try {
-            Workplace workplace = this.getWorkplace(wid);
-            while (true) {
-                mutex.acquire();
-                if (workplaceOwners.get(wid) == 0L && queueToWorkplace.get(wid).peek() == Thread.currentThread()) {
-                    workplaceSemaphores[workplaces.indexOf(workplace)].acquire();
-                    workplaceOwners.put(wid, Thread.currentThread().getId());
-                    queueToWorkplace.get(wid).poll();
-                    mutex.release();
-                    return workplace;
+        public void enter(Map<Long, Semaphore> threadSemaphores) {
+            try {
+                this.workplaceMutex.acquire();
+                if (this.owner == -1 && (this.queue.isEmpty() || this.queue.peek() == Thread.currentThread().getId())) {
+                    this.workplaceMutex.release();
                 } else {
-                    mutex.release();
+                    this.queue.add(Thread.currentThread().getId());
+                    this.workplaceMutex.release();
+                    threadSemaphores.get(Thread.currentThread().getId()).acquire();
                 }
+                this.place.acquire();
+                this.owner = Thread.currentThread().getId();
+                if (!this.queue.isEmpty() && this.queue.peek() == Thread.currentThread().getId()) {
+                    this.queue.poll();
+                }
+            } catch (InterruptedException e) {
+                throw new RuntimeException("panic: unexpected thread interruption");
             }
-        } catch (InterruptedException e) {
-            throw new RuntimeException("panic: unexpected thread interruption");
+        }
+
+        public void leave(Map<Long, Semaphore> threadSemaphores) {
+            try {
+                this.workplaceMutex.acquire();
+                this.owner = -1;
+                this.place.release();
+                if (!this.queue.isEmpty()) {
+                    this.workplaceMutex.release();
+                    threadSemaphores.get(this.queue.peek()).release();
+                } else {
+                    this.workplaceMutex.release();
+                }
+            } catch (InterruptedException e) {
+                throw new RuntimeException("panic: unexpected thread interruption");
+            }
         }
     }
 }
