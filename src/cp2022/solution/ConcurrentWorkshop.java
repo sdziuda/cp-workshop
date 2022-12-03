@@ -59,7 +59,7 @@ public class ConcurrentWorkshop implements Workshop {
 
     private WorkplaceWrapper getWorkplaceWrapper(Thread t) {
         return this.workplaces.stream()
-                .filter(workplaceWrapper -> workplaceWrapper.getOwner() == t.getId())
+                .filter(workplaceWrapper -> workplaceWrapper.owner == t.getId())
                 .findFirst()
                 .orElseThrow(() -> new RuntimeException("panic: workplace not found"));
     }
@@ -80,10 +80,6 @@ public class ConcurrentWorkshop implements Workshop {
             this.workshop = workshop;
             this.owner = -1;
             this.queue = new ConcurrentLinkedQueue<>();
-        }
-
-        public long getOwner() {
-            return this.owner;
         }
 
         public void enter() {
