@@ -111,7 +111,8 @@ public class ConcurrentWorkshop implements Workshop {
                 this.workshop.howManyEnteredNow++;
                 if (this.owner != -1) {
                     this.queue.add(Thread.currentThread().getId());
-                    if (this.workshop.howManyEnteredNow == 2 * this.workshop.workplaces.size() || this.workshop.workshopQueue.isEmpty()) {
+                    if (this.workshop.howManyEnteredNow == 2 * this.workshop.workplaces.size() ||
+                            this.workshop.workshopQueue.isEmpty()) {
                         this.workshop.mutex.release();
                     } else {
                         this.workshop.threadSemaphores.get(this.workshop.workshopQueue.peek()).release();
@@ -120,7 +121,8 @@ public class ConcurrentWorkshop implements Workshop {
                     this.queue.poll();
                 }
                 this.owner = Thread.currentThread().getId();
-                if (this.workshop.howManyEnteredNow == 2 * this.workshop.workplaces.size() || this.workshop.workshopQueue.isEmpty()) {
+                if (this.workshop.howManyEnteredNow == 2 * this.workshop.workplaces.size() ||
+                        this.workshop.workshopQueue.isEmpty()) {
                     this.workshop.mutex.release();
                 } else {
                     this.workshop.threadSemaphores.get(this.workshop.workshopQueue.peek()).release();
