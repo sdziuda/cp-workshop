@@ -150,13 +150,14 @@ public class ConcurrentWorkshop implements Workshop {
                         }
                         this.workshop.threadSemaphores.get(workplaceTo.owner).release();
                         this.workshop.threadSemaphores.get(Thread.currentThread().getId()).acquire();
+                        this.workshop.whereToSwitch[index] = -1;
                         workplaceTo.owner = Thread.currentThread().getId();
-                        this.workshop.mutex.release();
                     } else {
                         workplaceTo.queue.add(Thread.currentThread().getId());
                         this.workshop.mutex.release();
                         this.workshop.threadSemaphores.get(Thread.currentThread().getId()).acquire();
                         workplaceTo.queue.remove(Thread.currentThread().getId());
+                        this.workshop.whereToSwitch[index] = -1;
                         long oldWorkplaceToOwner = workplaceTo.owner;
                         workplaceTo.owner = Thread.currentThread().getId();
                         if (this.cycle != null) {
@@ -190,19 +191,17 @@ public class ConcurrentWorkshop implements Workshop {
         public void use() {
             if (this.cycle != null) {
                 try {
-                    this.workshop.mutex.acquire();
                     for (WorkplaceId id : cycle) {
                         WorkplaceWrapper workplace = this.workshop.getWorkplaceWrapper(id);
                         var latch = workplace.latch;
                         latch.countDown();
                     }
-                    this.workshop.whereToSwitch[this.workshop.getWorkplaceIndex(this)] = -1;
-                    this.workshop.mutex.release();
+                    WorkplaceId cycleStart = this.cycle.peek();
                     this.latch.await();
-                    this.workshop.mutex.acquire();
                     this.cycle = null;
-                    this.latch = null;
-                    this.workshop.mutex.release();
+                    if (cycleStart == this.getId()) {
+                        this.workshop.mutex.release();
+                    }
                 } catch (InterruptedException e) {
                     throw new RuntimeException("panic: unexpected thread interruption");
                 }
