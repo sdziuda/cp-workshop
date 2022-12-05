@@ -57,7 +57,7 @@ public class Main {
                 new TestStarvationBigStar(),
                 new TestEfficiencyParallel(),
                 new TestEfficiencyCycle(),
-                new TestBigRandomRotations(),
+                //new TestBigRandomRotations(),
                 new TestBigRandom1(),
                 new TestBigRandom2(),
                 new TestBigRandom3(),
