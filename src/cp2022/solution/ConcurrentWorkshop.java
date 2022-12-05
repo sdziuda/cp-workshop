@@ -13,6 +13,9 @@ public class ConcurrentWorkshop implements Workshop {
     private final Map<Long, Semaphore> threadSemaphores;
     private final Semaphore mutex;
     private final int[] whereToSwitch;
+    private final Queue<Long> workshopQueue;
+    private int howManyThreadsAreInWorkshop;
+    private int howManyEnteredNow;
 
     public ConcurrentWorkshop(Collection<Workplace> workplaces) {
         this.workplaces = new ArrayList<>();
@@ -23,6 +26,9 @@ public class ConcurrentWorkshop implements Workshop {
         this.mutex = new Semaphore(1, true);
         this.whereToSwitch = new int[this.workplaces.size()];
         Arrays.fill(this.whereToSwitch, -1);
+        this.workshopQueue = new ConcurrentLinkedQueue<>();
+        this.howManyThreadsAreInWorkshop = 0;
+        this.howManyEnteredNow = 0;
     }
 
     @Override
@@ -95,14 +101,30 @@ public class ConcurrentWorkshop implements Workshop {
         public void enter() {
             try {
                 this.workshop.mutex.acquire();
+                if (this.workshop.howManyEnteredNow >= 2 * this.workshop.workplaces.size()) {
+                    this.workshop.workshopQueue.add(Thread.currentThread().getId());
+                    this.workshop.mutex.release();
+                    this.workshop.threadSemaphores.get(Thread.currentThread().getId()).acquire();
+                    this.workshop.workshopQueue.poll();
+                }
+                this.workshop.howManyThreadsAreInWorkshop++;
+                this.workshop.howManyEnteredNow++;
                 if (this.owner != -1) {
                     this.queue.add(Thread.currentThread().getId());
-                    this.workshop.mutex.release();
+                    if (this.workshop.howManyEnteredNow == 2 * this.workshop.workplaces.size() || this.workshop.workshopQueue.isEmpty()) {
+                        this.workshop.mutex.release();
+                    } else {
+                        this.workshop.threadSemaphores.get(this.workshop.workshopQueue.peek()).release();
+                    }
                     this.workshop.threadSemaphores.get(Thread.currentThread().getId()).acquire();
                     this.queue.poll();
                 }
                 this.owner = Thread.currentThread().getId();
-                this.workshop.mutex.release();
+                if (this.workshop.howManyEnteredNow == 2 * this.workshop.workplaces.size() || this.workshop.workshopQueue.isEmpty()) {
+                    this.workshop.mutex.release();
+                } else {
+                    this.workshop.threadSemaphores.get(this.workshop.workshopQueue.peek()).release();
+                }
             } catch (InterruptedException e) {
                 throw new RuntimeException("panic: unexpected thread interruption");
             }
@@ -180,7 +202,15 @@ public class ConcurrentWorkshop implements Workshop {
 
         public void leave() {
             this.owner = -1;
-            if (!this.queue.isEmpty()) {
+            this.workshop.howManyThreadsAreInWorkshop--;
+            if (this.workshop.howManyThreadsAreInWorkshop == 0) {
+                this.workshop.howManyEnteredNow = 0;
+                if (!this.workshop.workshopQueue.isEmpty()) {
+                    this.workshop.threadSemaphores.get(this.workshop.workshopQueue.peek()).release();
+                } else {
+                    this.workshop.mutex.release();
+                }
+            } else if (!this.queue.isEmpty()) {
                 this.workshop.threadSemaphores.get(this.queue.peek()).release();
             } else {
                 this.workshop.mutex.release();
